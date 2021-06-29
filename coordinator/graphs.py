@@ -6,8 +6,7 @@ from typing import Any, List, Dict, Optional, Union, Tuple
 class Graph:
 
     """ (Directed Acyclic) Graphs
-    directed graph using Tarjan's algorithm (single DFS)
-    Complexity : O(V+E)
+    directed graph using DFS (Tarjan's Alg) O(V+E)
 
     This class represents a directed graph using a dict, 
     with the dict keys as the node list and arrays of their

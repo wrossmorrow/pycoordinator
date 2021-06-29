@@ -1,7 +1,9 @@
 
-from typing import Any, Optional, Union, Callable
+from typing import Any, List, Dict, Optional, Union, Callable
 
 from pydantic import BaseModel
+
+from inspect import iscoroutinefunction
 
 class Step(BaseModel):
 
@@ -78,4 +80,4 @@ class Step(BaseModel):
         if self.is_async():
             return await self.func(**kwargs)
         return self.func(**kwargs)
-        
+
