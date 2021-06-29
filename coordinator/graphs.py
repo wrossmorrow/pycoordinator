@@ -101,7 +101,7 @@ class Graph:
             G.add(v, u)
         return G
 
-    def add(self, u: Any, v: Optional[Any]=None):
+    def add(self, u: Any, v: Optional[Any]=None) -> Graph:
         """ add a node or an edge; chainable """
 
         if u is None:
@@ -120,7 +120,7 @@ class Graph:
 
         return self
 
-    def remove(self, u: Any, v: Optional[Any]=None):
+    def remove(self, u: Any, v: Optional[Any]=None) -> Graph:
         """ remove a node or an edge; chainable """
 
         if u not in self.G: # bad op
@@ -236,7 +236,7 @@ class Graph:
 
         return self.cc
 
-    def cyclic(self):
+    def cyclic(self) -> bool:
         """ True if the graph is cyclic (has a cycle), False if otherwise 
 
         Uses SCCs: a graph is cyclic if and only if the number of SCCs is
@@ -245,7 +245,7 @@ class Graph:
         self.scc()
         return len(self.cc) < len(self.G)
 
-    def acyclic(self):
+    def acyclic(self) -> bool:
         return not self.cyclic()
 
     def path(
