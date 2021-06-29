@@ -79,7 +79,21 @@ class Graph:
 
     def leaves(self) -> set:
         """ leaves: those nodes that do not have any outgoing edges """
-        return set([v for u in self.G if len(self.G) == 0])
+        return set([v for v in self.G if len(self.G[v]) == 0])
+
+    def intermediates(self) -> set:
+        """ intermediates: not roots and not leaves 
+        In other words, all nodes v such that 
+        (a) some edge ends at v
+        (b) some edge starts at v
+        """
+        s = set({})
+        for v in self.G:
+            if len(self.G[v]) > 0: 
+                s = s | {v} # some edge starts at v
+                for u in self.G[v]:
+                    s = s | {u} # some edge ends at u
+        return s
 
     def reverse(self) -> Graph:
         G = Graph()

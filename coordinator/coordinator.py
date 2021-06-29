@@ -18,7 +18,7 @@ class Coordinator:
         
         self.sleep_time = 0.0
 
-        # DAG always has a "_source" vertex for root level input
+        # DAG always has a "_source" vertex for run-level input
         self._dag = Graph(nodes=['_source'])
 
         self._steps = {}
@@ -34,6 +34,9 @@ class Coordinator:
         if attr == "step": 
             return SimpleNamespace(**self._steps)
         raise AttributeError(f"{self.__class__.__name__} has no attribute \"{attr}\"")
+
+    def dag(self):
+        return self._dag
 
     def add(self, step: Union[Step,Dict[str,Any]]):
         """Add a step, by Step obj or by dict to initialize Step with. Chainable. """
@@ -84,11 +87,19 @@ class Coordinator:
         We get these by taking the set union of all depends_on lists
         over steps. We remove the special _source "step". 
 
+        Basically, 
+
+            intermediates = nodes - roots - leaves
+
+        but that's not how this is explicitly computed. 
+
         If verify == True, then we also check that there are no such keys
         that are _not_ defined in the step list. This would mean a step
         has been added that depends on another step that has _not_ been 
         added (yet). 
         """
+
+        # take the union of all dependencies 
         v = set({})
         for s in self._steps:
             v = v | set(list(self._steps[s].depends_on.keys()))
@@ -100,18 +111,46 @@ class Coordinator:
                 raise ValueError(f"There are undefined dependency steps: \"{undefined_keys}\"")
         return v
 
+    def roots(self):
+        """ Get "roots" of the step graph
+        
+        Roots are steps that don't get fed by any other steps, ie have no
+        egress. In other words, "source" nodes (if steps are nodes). 
+        """
+        return self._dag.roots()
+
     def leaves(self):
         """ Get "leaves" of the step graph
         
         Leaves are steps that don't feed any other steps, ie not intermediates.
-        In other words, terminal nodes (if steps are nodes). 
+        In other words, terminal or "sink" nodes (if steps are nodes). 
         """
-        return set([s for s in self._steps if s not in self.intermediates()])
+        return self._dag.leaves()
 
     def verified(self):
         return self._verified
 
     def verify(self, params: Dict[str,Any]) -> bool:
+        """ Verify step graph is runnable
+
+        Check that there are no missing dependencies; eg 
+
+            N=[0,1], E=[(0->1),(2->1)]
+
+        would not be runnable as step "2" is not defined. Our add/remove
+        syntax should eliminate this possibility though. 
+
+        Check that the step graph is not cyclic, which would
+        represent a loop not a tree. eg
+
+            N=[0,1], E=[(0->1),(1->0)]
+
+        would not be runnable because it would just cycle (and our
+        dependency logic would probably fail). 
+
+        If we have parameters, check that there are no naming conflicts
+        between parameters and arguments from dependencies. 
+        """
 
         # check for undefined dependencies
         self.intermediates(verify=True)
@@ -130,6 +169,9 @@ class Coordinator:
         # if no failures, return 
         self._verified = True
 
+        # return True, as verification passed, but really raise if not
+        return True
+
     def launch(self, step: Union[Step,str], source: Any, 
                     data: Dict[str,Any], params: Dict[str,Any]) -> Task:
         """ "Launch" a step, meaning run the step if possible
@@ -138,7 +180,9 @@ class Coordinator:
         step. These fields should be populated if those other steps are
         complete (or we know their output). 
 
+        We then construct kwargs to pass to the Step executor. 
 
+        Finally an asyncio.Task is created for this execution. 
         """
 
         # assert call is with a step, not a step name
@@ -147,10 +191,13 @@ class Coordinator:
                 raise ValueError(f"Cannot launch step {step} here, no definition")
             return self.launch(self._steps[step], source=source, data=results, params=params)
 
+        # now that we've asserted a call with a Step type, enforce that
         if not isinstance(step, Step):
             raise ValueError(f"Cannot launch non-Step type {type(step)}")
 
         # evaluate if the Step is, in fact, launchable from given data
+        # We use existence of data fields for dependencies in depends_on
+        # as a sentinel; thus these (currently) can't be optional
         for p in [s for s in step.depends_on if s != "_source"]:
             if p not in data: # note data[p] _can_ be None, that may be valid output
                 logging.debug(f"step {step.name} not executable, \"{p}\" has not completed")
@@ -160,13 +207,19 @@ class Coordinator:
 
         # create keyword argument dict for execution; include 
         # params as a special field which gets unpacked in the Step
-        # execution check
+        # execution check. depends_on provides the keys which will 
+        # (cause kwargs) get mapped into argument names. So steps 
+        # have to be configured with this in mind. 
         kwargs = {
             step.depends_on[p]: source if p == "_source" else data[p] 
             for p in step.depends_on if step.depends_on[p] is not None
         }
         kwargs.update({'_params': params})
 
+        # create and start the asyncio.Task for this step. Using an 
+        # async sleep of 0 to facilitate context switching this 
+        # probably isn't so awful; but perhaps wrapping Tasks might
+        # be more performant for explicitly non-async executors.  
         return create_task(step.execute(**kwargs), name=step.name)
 
     async def sleep(self) -> None:
@@ -174,8 +227,21 @@ class Coordinator:
         await asleep(self.sleep_time)
 
     async def run(self, data: Any=None, params: Dict[str,Any]={}):
-        """ 
+        """ Run a step graph with specific data and params
 
+        First verify the current step graph state _can_ be run. 
+
+        Then loop, starting tasks for Steps that can be started 
+        (all their dependencies are complete), removing tasks and
+        storing their results when they complete, incrementing a 
+        counter for how many tasks have finished and stopping when
+        this counter equals the number of steps. 
+
+        By default we return only step results from leaves of the 
+        step graph. 
+
+        .run() can be called concurrently for different data/params
+        with tools like asyncio.gather() or asyncio.Tasks. 
         """
 
         if not self._verified: 
@@ -184,10 +250,20 @@ class Coordinator:
         # no running tasks, completed steps, or results (yet)
         # Note: a None result is possible, so we need results and flags
         # (but we could also use key existence as the flag)
+        # 
+        # Note these run tracking datastructures are local, not class
+        # variables. In principle we should be able to kick off 
+        # multiple separate (async) runs at the same time. 
+        # 
+        # TODO expand with instrumentation: 
+        # 
+        #   start time, done time, duration
+        #   errors if loose exception handling
+        # 
         tasks, finished = [], 0
         started = {self._steps[s].name: False for s in self._steps}
         done    = {self._steps[s].name: False for s in self._steps}
-        results = {} # {self._steps[s].name: None  for s in self._steps}
+        results = {} # use result existence as a completed signal
 
         # iterate until tasks are completed; inner loop should add tasks 
         # when possible
@@ -215,30 +291,43 @@ class Coordinator:
                             raise err
                         done[name], results[name] = True, t.result()
                         finished += 1
+                        # tasks.remove(t) here would change the iterator
 
-                # remove completed tasks
+                # remove completed tasks with a "not done" filter
                 tasks = [t for t in tasks if not done[t.get_name()]]
 
-                # if there are no tasks, we are finished
+                # are we finished? Note that tasks can be empty here
+                # and we can not be finished, because we need another 
+                # loop execution to know if there are more tasks to 
+                # create. 
                 if finished == len(self._steps):
                     break
 
                 await self.sleep()
 
+        # return terminal/sink results only by default
         return {s: results[s] for s in self.leaves()}
 
     async def poll(self, source: Source=None, params: Dict[str,Any]={}):
+        """ Repeatedly run a step graph for given params
+        
+        Data is drawn from some Source which we expect to yield data
+        from an (async) generator. Results should also be yielded back
+        so we can use output as an async generator. 
+        """
         async for data in source():
             yield self.run(data=data, params=params)
 
     async def __call__(self, data: Any=None, params: Dict[str,Any]={}):
-        """ call wraps run """
+        """ wraps run """
         return await self.run(data=data, params=params)
 
     def __add__(self, step: Union[Step,Dict[str,Any]]):
+        """ wraps add """
         return self.add(step)
 
     def __sub__(self, step: Union[Step,str]):
+        """ wraps remove """
         return self.remove(step)
 
     def __contains__(self, step: Union[Step,str]) -> bool:

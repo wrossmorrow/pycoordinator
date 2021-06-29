@@ -4,6 +4,8 @@ import asyncio
 import requests
 import pytest
 
+from time import time
+
 from typing import Optional
 
 from coordinator import Source, Step, Coordinator
@@ -23,6 +25,12 @@ def f_sync_http(msg: int) -> None:
 async def f_aio_http(msg: int) -> None:
     async with aiohttp.ClientSession() as session:
         response = await session.get("http://google.com")
+
+async def f_aio_wait(w: int) -> None:
+    s = time()
+    await asyncio.sleep(w)
+    e = time()
+    return w, s, e
 
 async def atest(msg: str, **kwargs) -> int:
     return int(msg)
@@ -319,10 +327,13 @@ async def test_fail():
 
 class Yielder(Source):
 
+    def __init__(self, t):
+        self.t = t
+
     async def __call__(self):
         for i in range(10):
-            yield 1
-            await asyncio.sleep(1)
+            yield i
+            await asyncio.sleep(self.t)
 
 @pytest.mark.asyncio
 async def test_gen():
@@ -337,5 +348,34 @@ async def test_gen():
         }
     )
 
-    async for results in C.poll(Yielder()):
+    async for results in C.poll(Yielder(0.1)):
         print(await results)
+
+
+@pytest.mark.asyncio
+async def test_multiple():
+
+    C = Coordinator()
+
+    C += Step(
+        name="wait", 
+        func=f_aio_wait, 
+        depends_on={"_source": "w"}
+    )
+
+    s = time()
+    results = await asyncio.gather(C.run(data=2), C.run(data=1))
+    d = time() - s
+
+    r1 = results[0]['wait']
+    r2 = results[1]['wait']
+
+    # first run waits for 2 seconds and should end after the second run
+    assert ( r1[0] == 2 ) and ( r1[2] > r2[2] )
+
+    # second run waits for 1 seconds and should start after the first run
+    assert ( r2[0] == 1 ) and ( r2[1] > r1[1] )
+
+    # running concurrently should take around 2 seconds, not the 
+    # total "wait" time of 3 seconds
+    assert d < 3
