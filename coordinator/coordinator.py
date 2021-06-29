@@ -4,11 +4,7 @@ import logging
 from typing import Any, List, Dict, Optional, Union, Callable
 from types import SimpleNamespace
 
-from pydantic import BaseModel
-
 from asyncio import Task, create_task, sleep as asleep
-
-from inspect import iscoroutinefunction
 
 from coordinator.steps import Step
 from coordinator.graphs import Graph
@@ -255,24 +251,3 @@ class Coordinator:
 
         return step.name in self._steps
 
-class PollingCoordinator:
-
-    def __init__(self, coord: Coordinator, source: Source=None, params: Dict[str,Any]={}):
-
-        self.crd = coord
-        self.src = source
-        self.prm = params
-
-    async def __aiter__(self):
-        if not self.crd.verified():
-            self.crd.verify(params=params)
-            # will raise on a problem
-        return self
-
-    async def __anext__(self):
-        msg = await self.src.__anext__()
-        raise StopAsyncIteration
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
