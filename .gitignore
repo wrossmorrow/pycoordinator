@@ -1,4 +1,10 @@
 
-.env
+__pycache__/
 .pytest*
-__pycache__
+
+.env
+*.secret.*
+
+build/
+dist/
+*.egg-info/
